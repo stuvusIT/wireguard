@@ -1,0 +1,18 @@
+---
+- name: Add unstable repo
+  apt_repository:
+    repo: deb http://deb.debian.org/debian/ unstable main
+
+- name: Pin unstable repo
+  copy:
+    content: |
+      Package: *
+      Pin: release a=unstable
+      Pin-Priority: -1
+    dest: /etc/apt/preferences.d/limit-unstable
+
+- name: Install WireGuard
+  apt:
+    update_cache: True
+    name:
+      - wireguard
