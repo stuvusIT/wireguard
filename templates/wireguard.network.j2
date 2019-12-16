@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+
+[Match]
+Name=wg{{ wg.key }}
+
+[Network]
+{% for network in wg.value.networks %}
+Address={{ network }}
+{% endfor %}

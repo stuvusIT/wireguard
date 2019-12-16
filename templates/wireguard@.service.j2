@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+
+[Unit]
+Description=Brings up WireGuard interface %i
+After=network.target
+
+[Service]
+ExecStart=/etc/wireguard/%i-up.sh
+
+[Install]
+WantedBy=multi-user.target
