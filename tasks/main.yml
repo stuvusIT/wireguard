@@ -13,7 +13,6 @@
 
 - name: Install WireGuard
   apt:
-    update_cache: True
     name:
       - wireguard-dkms
     default_release: testing
