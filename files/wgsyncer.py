@@ -63,7 +63,12 @@ def read_allowed_ips(interface_name):
 
 def is_ip_subset(lhs, rhs):  # lhs and rhs of type Prefix
     suffix_len = 32 - rhs.prefix_len
-    return lhs.prefix_len <= rhs.prefix_len and (lhs.network >> suffix_len) == (rhs.network >> suffix_len)
+    return lhs.prefix_len >= rhs.prefix_len and (lhs.network >> suffix_len) == (rhs.network >> suffix_len)
+
+
+def is_strict_ip_subset(lhs, rhs):  # lhs and rhs of type Prefix
+    suffix_len = 32 - rhs.prefix_len
+    return lhs.prefix_len > rhs.prefix_len and (lhs.network >> suffix_len) == (rhs.network >> suffix_len)
 
 
 def convert_link_route(old_allowed_ips, prefix):
@@ -81,13 +86,14 @@ def convert_global_route(old_allowed_ips, prefix, gateway):
             yield (entry[0], prefix)
             break
 
-def calc_new_allowed_ips(old_allowed_ips, table, interface):
+
+def calc_new_allowed_ips_dict(old_allowed_ips, table, interface):
     new_allowed_ips_dict = collections.defaultdict(lambda: [])
     for route in ipr.get_routes(family=socket.AF_INET, table=table, oif=interface):
         attrs = dict(route["attrs"])
         prefix_len = route["dst_len"]
-        print(route)
-        prefix = Prefix(0 if prefix_len == 0 else parse_ip(attrs["RTA_DST"]), prefix_len)
+        prefix = Prefix(0 if prefix_len == 0 else parse_ip(
+            attrs["RTA_DST"]), prefix_len)
         if route["scope"] == 253:
             generator = convert_link_route(old_allowed_ips, prefix)
         else:
@@ -95,14 +101,19 @@ def calc_new_allowed_ips(old_allowed_ips, table, interface):
                 old_allowed_ips, prefix, parse_ip(attrs["RTA_GATEWAY"]))
         for allowed_ip in generator:
             new_allowed_ips_dict[allowed_ip[0]].append(allowed_ip[1])
-    return new_allowed_ips_dict
+
+    def filtered_prefix_list(prefix_list):
+        def should_keep(prefix):
+            return all(map(lambda other_prefix: not is_strict_ip_subset(prefix, other_prefix), prefix_list))
+        return list(filter(should_keep, prefix_list))
+    return {pubkey: filtered_prefix_list(prefix_list) for pubkey, prefix_list in new_allowed_ips_dict.items()}
 
 
 def set_allowed_ips(allowed_ips_dict):
     for pubkey, prefix_list in sorted(allowed_ips_dict.items()):
         comma_separated_prefix_list = ",".join(map(str, prefix_list))
         command = ["wg", "set", interface_name, "peer",
-                    pubkey, "allowed-ips", comma_separated_prefix_list]
+                   pubkey, "allowed-ips", comma_separated_prefix_list]
         logging.info("+ " + " ".join(command))
         completed_proc = subprocess.run(command)
         if completed_proc.returncode != 0:
@@ -120,7 +131,8 @@ def sync_allowed_ips(ipr, instances):
         logging.info("Starting to sync table {} into dev {}.".format(
             table, interface_name))
         old_allowed_ips = read_allowed_ips(interface_name)
-        new_allowed_ips_dict = calc_new_allowed_ips(old_allowed_ips, table, interface)
+        new_allowed_ips_dict = calc_new_allowed_ips_dict(
+            old_allowed_ips, table, interface)
         set_allowed_ips(new_allowed_ips_dict)
         logging.info("Finished syncing table {} into dev {}.".format(
             table, interface_name))
@@ -206,7 +218,8 @@ if __name__ == "__main__":
     with pyroute2.IPRoute() as ipr:
         sync_allowed_ips(ipr, instances)
         command = ["ip", "monitor", "route"]
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, encoding="utf-8")
+        proc = subprocess.Popen(
+            command, stdout=subprocess.PIPE, encoding="utf-8")
         logging.info("+ " + " ".join(command))
         for line in iter(proc.stdout.readline, ""):
             logging.info("Monitored: " + line.rstrip())
