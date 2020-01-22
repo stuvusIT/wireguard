@@ -1,33 +1,51 @@
 #!/usr/bin/env python3
+"""
+TODO
+"""
 
+# standard imports
 import argparse
 import collections
 import json
 import logging
-import pyroute2
 import signal
 import socket
 import subprocess
+import sys
+
+# installed modules
+import pyroute2
 
 
-def parse_ip(ip_str):
-    split = ip_str.split(".")
-    ip = 0
-    for block in split:
-        ip *= 256
-        ip += int(block)
-    return ip
+class Prefix(collections.namedtuple('Prefix', 'network prefix_len')):
+    """
+    TODO
+    """
+    @staticmethod
+    def parse(prefix_str):
+        """
+        TODO
+        """
+        split = prefix_str.split("/")
+        return Prefix(parse_ip(split[0]), int(split[1]))
 
+    @staticmethod
+    def is_subset(lhs, rhs):  # lhs and rhs of type Prefix
+        """
+        TODO
+        """
+        suffix_len = 32 - rhs.prefix_len
+        return lhs.prefix_len >= rhs.prefix_len and (
+            lhs.network >> suffix_len) == (rhs.network >> suffix_len)
 
-def parse_prefix(prefix_str):
-    split = prefix_str.split("/")
-    return Prefix(parse_ip(split[0]), int(split[1]))
-
-
-class Prefix:
-    def __init__(self, network, prefix_len):
-        self.network = network
-        self.prefix_len = prefix_len
+    @staticmethod
+    def is_strict_subset(lhs, rhs):  # lhs and rhs of type Prefix
+        """
+        TODO
+        """
+        suffix_len = 32 - rhs.prefix_len
+        return lhs.prefix_len > rhs.prefix_len and (
+            lhs.network >> suffix_len) == (rhs.network >> suffix_len)
 
     def __str__(self):
         result = ""
@@ -42,139 +60,10 @@ class Prefix:
         return result
 
 
-def read_allowed_ips(interface_name):
-    allowed_ips = []
-    command = ["wg", "show", interface_name, "allowed-ips"]
-    logging.info("+ " + " ".join(command))
-    proc = subprocess.Popen(command, stdout=subprocess.PIPE, encoding="utf-8")
-    for line in iter(proc.stdout.readline, ""):
-        line = line.rstrip()
-        line_split = line.split("\t")
-        pubkey = line_split[0]
-        if line_split[1] != '(none)':
-            for ip_str in line_split[1].split(" "):
-                prefix = parse_prefix(ip_str)
-                allowed_ips.append((pubkey, prefix))
-    returncode = proc.wait()
-    if returncode != 0:
-        logging.error("subprocess exited with code {}.".format(returncode))
-    return sorted(allowed_ips, key=lambda a: -a[1].prefix_len)
-
-
-def is_ip_subset(lhs, rhs):  # lhs and rhs of type Prefix
-    suffix_len = 32 - rhs.prefix_len
-    return lhs.prefix_len >= rhs.prefix_len and (lhs.network >> suffix_len) == (rhs.network >> suffix_len)
-
-
-def is_strict_ip_subset(lhs, rhs):  # lhs and rhs of type Prefix
-    suffix_len = 32 - rhs.prefix_len
-    return lhs.prefix_len > rhs.prefix_len and (lhs.network >> suffix_len) == (rhs.network >> suffix_len)
-
-
-def convert_link_route(old_allowed_ips, prefix):
-    for entry in old_allowed_ips:
-        if is_ip_subset(prefix, entry[1]):
-            yield (entry[0], prefix)
-            break
-        elif is_ip_subset(entry[1], prefix):
-            yield entry
-
-
-def convert_global_route(old_allowed_ips, prefix, gateway):
-    for entry in old_allowed_ips:
-        if is_ip_subset(Prefix(gateway, 32), entry[1]):
-            yield (entry[0], prefix)
-            break
-
-
-def calc_new_allowed_ips_dict(old_allowed_ips, table, interface):
-    new_allowed_ips_dict = collections.defaultdict(lambda: [])
-    for route in ipr.get_routes(family=socket.AF_INET, table=table, oif=interface):
-        attrs = dict(route["attrs"])
-        prefix_len = route["dst_len"]
-        prefix = Prefix(0 if prefix_len == 0 else parse_ip(
-            attrs["RTA_DST"]), prefix_len)
-        if route["scope"] == 253:
-            generator = convert_link_route(old_allowed_ips, prefix)
-        else:
-            generator = convert_global_route(
-                old_allowed_ips, prefix, parse_ip(attrs["RTA_GATEWAY"]))
-        for allowed_ip in generator:
-            new_allowed_ips_dict[allowed_ip[0]].append(allowed_ip[1])
-
-    def filtered_prefix_list(prefix_list):
-        def should_keep(prefix):
-            return all(map(lambda other_prefix: not is_strict_ip_subset(prefix, other_prefix), prefix_list))
-        return list(filter(should_keep, prefix_list))
-    return {pubkey: filtered_prefix_list(prefix_list) for pubkey, prefix_list in new_allowed_ips_dict.items()}
-
-
-def set_allowed_ips(allowed_ips_dict):
-    for pubkey, prefix_list in sorted(allowed_ips_dict.items()):
-        comma_separated_prefix_list = ",".join(map(str, prefix_list))
-        command = ["wg", "set", interface_name, "peer",
-                   pubkey, "allowed-ips", comma_separated_prefix_list]
-        logging.info("+ " + " ".join(command))
-        completed_proc = subprocess.run(command)
-        if completed_proc.returncode != 0:
-            logging.error("subprocess exited with code {}.".format(
-                completed_proc.returncode))
-
-
-def sync_allowed_ips(ipr, instances):
-    for interface_name, table in instances.items():
-        interface = next(iter(ipr.link_lookup(ifname=interface_name)), None)
-        if interface is None:
-            logging.warning("Attempted to sync table {} into dev {}, but dev {} does not exist.".format(
-                table, interface_name, interface_name))
-            continue
-        logging.info("Starting to sync table {} into dev {}.".format(
-            table, interface_name))
-        old_allowed_ips = read_allowed_ips(interface_name)
-        new_allowed_ips_dict = calc_new_allowed_ips_dict(
-            old_allowed_ips, table, interface)
-        set_allowed_ips(new_allowed_ips_dict)
-        logging.info("Finished syncing table {} into dev {}.".format(
-            table, interface_name))
-
-
-def table_lookup(table_name):
-    table_name = table_name.lower()
-    if table_name == "local":
-        return 255
-    elif table_name == "main":
-        return 254
-    elif table_name == "default":
-        return 253
-    elif table_name == "unspecified":
-        return 0
-    elif table_name == "none":
-        return -1
-    else:
-        return int(table_name)
-
-
-def handle_sigint(sig, frame):
-    logging.info("Received SIGINT. Exiting.")
-    exit(0)
-
-
-def handle_sigterm(sig, frame):
-    logging.info("Received SIGTERM. Exiting.")
-    exit(0)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Synchronize routes into WireGuard allowed-ips.")
-    parser.add_argument("-c", "--config", nargs=1, metavar="config_path",
-                        default="wgsyncer.json", help="Path to the configuration file")
-    parser.add_argument("--log-level", metavar="log_level",
-                        default="INFO", help="Logging level")
-    return parser.parse_args()
-
-
-if __name__ == "__main__":
+def main():
+    """
+    TODO
+    """
     signal.signal(signal.SIGINT, handle_sigint)
     signal.signal(signal.SIGTERM, handle_sigterm)
 
@@ -186,19 +75,19 @@ if __name__ == "__main__":
     try:
         with open(config_path, "r") as config:
             config = json.load(config)
-    except Exception as e:
+    except (OSError, json.JSONDecodeError) as exc:
         logging.error("Failed to parse config. The error is printed below.")
-        logging.info(e)
-        exit(2)
+        logging.info(exc)
+        sys.exit(2)
 
     if 'instances' not in config:
         logging.error("Configuration key 'instances' is required.")
-        exit(3)
+        sys.exit(3)
     instances = config['instances']
 
-    if type(instances) != dict:
+    if not isinstance(instances, dict):
         logging.error("Configuration key 'instances' must be a dict.")
-        exit(4)
+        sys.exit(4)
 
     if instances == {}:
         logging.warning("wgsyncer was not configured to sync anything.")
@@ -206,26 +95,199 @@ if __name__ == "__main__":
         try:
             instances = {interface_name: table_lookup(
                 table) for interface_name, table in instances.items()}
-        except Exception as e:
+        except ValueError as exc:
             logging.error(
                 "Failed to parse a table name in the config. The error is printed below.")
-            logging.info(e)
-            exit(5)
+            logging.info(exc)
+            sys.exit(5)
         for interface_name, table in instances.items():
-            logging.info("Configured to sync table {} into dev {}.".format(
-                table, interface_name))
+            logging.info("Configured to sync table %s into dev %s.", table, interface_name)
 
+    run_wgsyncer(instances)
+
+    sys.exit(1)
+
+
+def handle_sigint(_sig, _frame):
+    """
+    TODO
+    """
+    logging.info("Received SIGINT. Exiting.")
+    sys.exit(0)
+
+
+def handle_sigterm(_sig, _frame):
+    """
+    TODO
+    """
+    logging.info("Received SIGTERM. Exiting.")
+    sys.exit(0)
+
+
+def parse_args():
+    """
+    TODO
+    """
+    parser = argparse.ArgumentParser(
+        description="Synchronize routes into WireGuard allowed-ips.")
+    parser.add_argument("-c", "--config", nargs=1, metavar="config_path",
+                        default="wgsyncer.json", help="Path to the configuration file")
+    parser.add_argument("--log-level", metavar="log_level",
+                        default="INFO", help="Logging level")
+    return parser.parse_args()
+
+
+def table_lookup(table_name):
+    """
+    TODO
+    """
+    table_name = table_name.lower()
+    if table_name == "local":
+        return 255
+    if table_name == "main":
+        return 254
+    if table_name == "default":
+        return 253
+    if table_name == "unspecified":
+        return 0
+    if table_name == "none":
+        return -1
+    return int(table_name)
+
+
+def run_wgsyncer(instances):
+    """
+    TODO
+    """
     with pyroute2.IPRoute() as ipr:
         sync_allowed_ips(ipr, instances)
         command = ["ip", "monitor", "route"]
         proc = subprocess.Popen(
             command, stdout=subprocess.PIPE, encoding="utf-8")
-        logging.info("+ " + " ".join(command))
+        logging.info("+ %s", " ".join(command))
         for line in iter(proc.stdout.readline, ""):
-            logging.info("Monitored: " + line.rstrip())
+            logging.info("Monitored: %s", line.rstrip())
             sync_allowed_ips(ipr, instances)
         returncode = proc.wait()
-        logging.error("`{}` exited with code {}.".format(
-            " ".join(command), returncode))
+        logging.error("`%s` exited with code %s.", " ".join(command), returncode)
 
-    exit(1)
+
+def sync_allowed_ips(ipr, instances):
+    """
+    TODO
+    """
+    for interface_name, table in instances.items():
+        interface = next(iter(ipr.link_lookup(ifname=interface_name)), None)
+        if interface is None:
+            logging.warning(
+                "Attempted to sync table %s into dev %s, but dev %s does not exist.",
+                table, interface_name, interface_name)
+            continue
+        logging.info("Starting to sync table %s into dev %s.", table, interface_name)
+        old_allowed_ips = read_allowed_ips(interface_name)
+        new_allowed_ips_dict = calc_new_allowed_ips_dict(
+            ipr, old_allowed_ips, table, interface)
+        set_allowed_ips(interface_name, new_allowed_ips_dict)
+        logging.info("Finished syncing table %s into dev %s.", table, interface_name)
+
+
+def read_allowed_ips(interface_name):
+    """
+    TODO
+    """
+    allowed_ips = []
+    command = ["wg", "show", interface_name, "allowed-ips"]
+    logging.info("+ %s", " ".join(command))
+    proc = subprocess.Popen(command, stdout=subprocess.PIPE, encoding="utf-8")
+    for line in iter(proc.stdout.readline, ""):
+        line = line.rstrip()
+        line_split = line.split("\t")
+        pubkey = line_split[0]
+        if line_split[1] != '(none)':
+            for ip_str in line_split[1].split(" "):
+                prefix = Prefix.parse(ip_str)
+                allowed_ips.append((pubkey, prefix))
+    returncode = proc.wait()
+    if returncode != 0:
+        logging.error("subprocess exited with code %s.", returncode)
+    return sorted(allowed_ips, key=lambda a: -a[1].prefix_len)
+
+
+def calc_new_allowed_ips_dict(ipr, old_allowed_ips, table, interface):
+    """
+    TODO
+    """
+    new_allowed_ips_dict = collections.defaultdict(lambda: [])
+    for route in ipr.get_routes(
+            family=socket.AF_INET, table=table, oif=interface):
+        attrs = dict(route["attrs"])
+        prefix_len = route["dst_len"]
+        prefix = Prefix(0 if prefix_len == 0 else parse_ip(attrs["RTA_DST"]), prefix_len)
+        if route["scope"] == 253:
+            generator = convert_link_route(old_allowed_ips, prefix)
+        else:
+            generator = convert_global_route(
+                old_allowed_ips, prefix, parse_ip(attrs["RTA_GATEWAY"]))
+        for allowed_ip in generator:
+            new_allowed_ips_dict[allowed_ip[0]].append(allowed_ip[1])
+
+    def filtered_prefix_list(prefix_list):
+        def should_keep(prefix):
+            return all(map(lambda other_prefix: not Prefix.is_strict_subset(
+                prefix, other_prefix), prefix_list))
+        return list(filter(should_keep, prefix_list))
+    return {pubkey: filtered_prefix_list(
+        prefix_list) for pubkey, prefix_list in new_allowed_ips_dict.items()}
+
+
+def parse_ip(ip_str):
+    """
+    TODO
+    """
+    split = ip_str.split(".")
+    ip_int = 0
+    for block in split:
+        ip_int *= 256
+        ip_int += int(block)
+    return ip_int
+
+
+def convert_link_route(old_allowed_ips, prefix):
+    """
+    TODO
+    """
+    for entry in old_allowed_ips:
+        if Prefix.is_subset(prefix, entry[1]):
+            yield (entry[0], prefix)
+            break
+        if Prefix.is_subset(entry[1], prefix):
+            yield entry
+
+
+def convert_global_route(old_allowed_ips, prefix, gateway):
+    """
+    TODO
+    """
+    for entry in old_allowed_ips:
+        if Prefix.is_subset(Prefix(gateway, 32), entry[1]):
+            yield (entry[0], prefix)
+            break
+
+
+def set_allowed_ips(interface_name, allowed_ips_dict):
+    """
+    TODO
+    """
+    for pubkey, prefix_list in sorted(allowed_ips_dict.items()):
+        comma_separated_prefix_list = ",".join(map(str, prefix_list))
+        command = ["wg", "set", interface_name, "peer",
+                   pubkey, "allowed-ips", comma_separated_prefix_list]
+        logging.info("+ %s", " ".join(command))
+        try:
+            subprocess.run(command, check=True)
+        except subprocess.CalledProcessError as exc:
+            logging.error("subprocess exited with code %s.", exc.returncode)
+
+
+if __name__ == "__main__":
+    main()
