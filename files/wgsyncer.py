@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-TODO
+See:
+    $ python3 wgsyncer.py --help
 """
 
 # standard imports
@@ -19,35 +20,44 @@ import pyroute2
 
 class Prefix(collections.namedtuple('Prefix', 'network prefix_len')):
     """
-    TODO
+    Data structure for storing an (IP) prefix.
+
+    Attributes:
+        network (int): Network address, represented as int. See parse_ip.
+        prefix_len (int): Prefix length of the network.
     """
     @staticmethod
-    def parse(prefix_str):
+    def parse(prefix_str: str):
         """
-        TODO
+        Converts a prefix given as str into a Prefix object.
+
+        Example:
+            Prefix.parse("192.168.100.0/24")
         """
         split = prefix_str.split("/")
         return Prefix(parse_ip(split[0]), int(split[1]))
 
     @staticmethod
-    def is_subset(lhs, rhs):  # lhs and rhs of type Prefix
-        """
-        TODO
-        """
+    def is_subset(lhs: "Prefix", rhs: "Prefix"):
+        """Returns true iff all IPs belonging to lhs also belong to rhs."""
         suffix_len = 32 - rhs.prefix_len
         return lhs.prefix_len >= rhs.prefix_len and (
             lhs.network >> suffix_len) == (rhs.network >> suffix_len)
 
     @staticmethod
-    def is_strict_subset(lhs, rhs):  # lhs and rhs of type Prefix
-        """
-        TODO
-        """
+    def is_strict_subset(lhs: "Prefix", rhs: "Prefix"):
+        """Returns true iff lhs != rhs and all IPs belonging to lhs also belong to rhs."""
         suffix_len = 32 - rhs.prefix_len
         return lhs.prefix_len > rhs.prefix_len and (
             lhs.network >> suffix_len) == (rhs.network >> suffix_len)
 
     def __str__(self):
+        """
+        Implements conversion to str.
+
+        Example:
+            str(Prefix.parse("192.168.100.0/24")) == "192.168.100.0/24"
+        """
         result = ""
         network = self.network
         for i in [24, 16, 8, 0]:
@@ -61,9 +71,7 @@ class Prefix(collections.namedtuple('Prefix', 'network prefix_len')):
 
 
 def main():
-    """
-    TODO
-    """
+    """This is the main function called when wgsyncer.py is run."""
     signal.signal(signal.SIGINT, handle_sigint)
     signal.signal(signal.SIGTERM, handle_sigterm)
 
@@ -109,27 +117,45 @@ def main():
 
 
 def handle_sigint(_sig, _frame):
-    """
-    TODO
-    """
+    """Exit successfully on SIGINT. This handler is registered in main()."""
     logging.info("Received SIGINT. Exiting.")
     sys.exit(0)
 
 
 def handle_sigterm(_sig, _frame):
-    """
-    TODO
-    """
+    """Exit successfully on SIGTERM. This handler is registered in main()."""
     logging.info("Received SIGTERM. Exiting.")
     sys.exit(0)
 
 
 def parse_args():
     """
-    TODO
+    Parses arguments. See:
+        $ python3 wgsyncer.py --help
     """
     parser = argparse.ArgumentParser(
-        description="Synchronize routes into WireGuard allowed-ips.")
+        description="""
+When using dynamic routing one is inclined to give every (trusted) peer of a
+WireGuard interface the allowed IPs 0.0.0.0/0. However, multiple peers of a
+WireGuard interface cannot have overlapping allowed IPs.
+
+The solution is this script which synchronizes a routing table into the allowed
+IPs of a WireGuard interface.
+
+In fact, this script can run multiple such instances. For each WireGuard
+interface, at most one routing table can by synchronized into its allowed IPs.
+This script needs a configuration file (defaults to "./wgsyncer.json")
+specifying those instances.
+
+Example:
+
+```json
+{
+    "instances": {
+        "wg0": "main"
+    }
+}
+```""", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-c", "--config", nargs=1, metavar="config_path",
                         default="wgsyncer.json", help="Path to the configuration file")
     parser.add_argument("--log-level", metavar="log_level",
@@ -139,7 +165,8 @@ def parse_args():
 
 def table_lookup(table_name):
     """
-    TODO
+    Turns the name of a routing table into the respective table ID. Note that only the standard
+    table names and integers (possibly given as str) are supported.
     """
     table_name = table_name.lower()
     if table_name == "local":
@@ -155,9 +182,19 @@ def table_lookup(table_name):
     return int(table_name)
 
 
-def run_wgsyncer(instances):
+def run_wgsyncer(instances: dict):
     """
-    TODO
+    Runs the main logic.
+
+    Args:
+        instances (dict):
+            a pair of a WireGuard interface name and a routing table (as int) to synchronize into
+            the allowed IPs of that interface. instances is a dict, because for each WireGuard
+            interface, at most one routing table can by synchronized into its allowed IPs. Since the
+            tables are expected as int, you might want to use table_lookup beforehand.
+
+    Example:
+        run_wgsyncer({ "wg0": table_lookup("main") })
     """
     with pyroute2.IPRoute() as ipr:
         sync_allowed_ips(ipr, instances)
@@ -172,9 +209,15 @@ def run_wgsyncer(instances):
         logging.error("`%s` exited with code %s.", " ".join(command), returncode)
 
 
-def sync_allowed_ips(ipr, instances):
+def sync_allowed_ips(ipr: pyroute2.IPRoute, instances: dict):
     """
-    TODO
+    For each instance:
+    1) Read the allowed IPs from the WireGuard interface.
+    2) Compute the desired allowed IPs (based on the routing table).
+    3) Set the allowed IPs for the WireGuard interface.
+
+    Args:
+        instances (dict): See documentation of run_wgsyncer(instances).
     """
     for interface_name, table in instances.items():
         interface = next(iter(ipr.link_lookup(ifname=interface_name)), None)
@@ -191,9 +234,16 @@ def sync_allowed_ips(ipr, instances):
         logging.info("Finished syncing table %s into dev %s.", table, interface_name)
 
 
-def read_allowed_ips(interface_name):
+def read_allowed_ips(interface_name: str):
     """
-    TODO
+    Read the allowed IPs from the WireGuard interface.
+
+    Args:
+        interface_name (str): Name of the WireGuard interface.
+
+    Returns:
+        list of pairs (pubkey: str, prefix: Prefx). That list is sorted by decreasing
+        prefix.prefix_len (in order to allow faster lookup of smallest superset).
     """
     allowed_ips = []
     command = ["wg", "show", interface_name, "allowed-ips"]
@@ -213,9 +263,21 @@ def read_allowed_ips(interface_name):
     return sorted(allowed_ips, key=lambda a: -a[1].prefix_len)
 
 
-def calc_new_allowed_ips_dict(ipr, old_allowed_ips, table, interface):
+def calc_new_allowed_ips_dict(ipr: pyroute2.IPRoute, old_allowed_ips, table, interface):
     """
-    TODO
+    Computes the desired allowed IPs for a WireGuard interface, based on the given routing table.
+
+    Args:
+        ipr (pyroute2.IPRoute): See https://docs.pyroute2.org/iproute.html
+        old_allowed_ips (list):
+            Old allowed IPs on the WireGuard interface. This is needed to match gateway IPs. The
+            list should be as returned by read_allowed_ips.
+        table (int): routing table to synchronize into the allowed IPs of the WireGuard interface.
+        interface (int): ID of the WireGuard interface (as obtained by ipr.link_lookup).
+
+    Returns:
+        dict with pubkeys as key where each value is the respective list of allowed IPs (as Prefix
+        objects).
     """
     new_allowed_ips_dict = collections.defaultdict(lambda: [])
     for route in ipr.get_routes(
@@ -241,9 +303,7 @@ def calc_new_allowed_ips_dict(ipr, old_allowed_ips, table, interface):
 
 
 def parse_ip(ip_str):
-    """
-    TODO
-    """
+    """Converts an ip from str to int."""
     split = ip_str.split(".")
     ip_int = 0
     for block in split:
@@ -254,7 +314,14 @@ def parse_ip(ip_str):
 
 def convert_link_route(old_allowed_ips, prefix):
     """
-    TODO
+    Args:
+        old_allowed_ips (list): See documentation of calc_new_allowed_ips_dict.
+        prefix (Prefix): A prefix that is sent to the WireGuard interface for link-local routing.
+
+    Returns:
+        A generator yielding the allowed IPs that have to be added s.t. the prefix can be
+        successfully routed to the WireGuard interface. Hereby each yielded element is a pair
+        (pubkey: str, prefix: Prefx).
     """
     for entry in old_allowed_ips:
         if Prefix.is_subset(prefix, entry[1]):
@@ -266,7 +333,14 @@ def convert_link_route(old_allowed_ips, prefix):
 
 def convert_global_route(old_allowed_ips, prefix, gateway):
     """
-    TODO
+    Args:
+        old_allowed_ips (list): See documentation of calc_new_allowed_ips_dict.
+        prefix (Prefix):
+            A prefix that is sent to the WireGuard interface for global routing via some gateway.
+        gateway (int): The gateway described above, given as int.
+
+    Returns:
+        See documentation of convert_link_route.
     """
     for entry in old_allowed_ips:
         if Prefix.is_subset(Prefix(gateway, 32), entry[1]):
@@ -276,7 +350,13 @@ def convert_global_route(old_allowed_ips, prefix, gateway):
 
 def set_allowed_ips(interface_name, allowed_ips_dict):
     """
-    TODO
+    Sets the allowed IPs for a WireGuard interface.
+
+    Args:
+        interface_name (str): Name of the WireGuard interface.
+        allowed_ips_dict (dict):
+            dict with pubkeys as key where each value is the respective list of allowed IPs (as
+            Prefix objects).
     """
     for pubkey, prefix_list in sorted(allowed_ips_dict.items()):
         comma_separated_prefix_list = ",".join(map(str, prefix_list))
