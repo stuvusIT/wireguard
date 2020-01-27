@@ -294,6 +294,8 @@ def calc_new_allowed_ips_dict(ipr: pyroute2.IPRoute, old_allowed_ips, table, int
         for allowed_ip in generator:
             new_allowed_ips_dict[allowed_ip[0]].append(allowed_ip[1])
 
+    # This filters unnecessary entries. Specifically, it filters prefix_list s.t. it does not
+    # contain two Prefix objects A, B where A is a strict subset of B.
     def filtered_prefix_list(prefix_list):
         def should_keep(prefix):
             return all(map(lambda other_prefix: not Prefix.is_strict_subset(
