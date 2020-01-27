@@ -113,6 +113,7 @@ def main():
 
     run_wgsyncer(instances)
 
+    # run_wgsyncer should never return.
     sys.exit(1)
 
 
