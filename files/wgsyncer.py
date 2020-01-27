@@ -315,7 +315,9 @@ def parse_ip(ip_str):
 def convert_link_route(old_allowed_ips, prefix):
     """
     Args:
-        old_allowed_ips (list): See documentation of calc_new_allowed_ips_dict.
+        old_allowed_ips (list):
+            See documentation of calc_new_allowed_ips_dict. old_allowed_ips must be sorted by
+            decreasing prefix length.
         prefix (Prefix): A prefix that is sent to the WireGuard interface for link-local routing.
 
     Returns:
@@ -334,7 +336,9 @@ def convert_link_route(old_allowed_ips, prefix):
 def convert_global_route(old_allowed_ips, prefix, gateway):
     """
     Args:
-        old_allowed_ips (list): See documentation of calc_new_allowed_ips_dict.
+        old_allowed_ips (list):
+            See documentation of calc_new_allowed_ips_dict. old_allowed_ips must be sorted by
+            decreasing prefix length.
         prefix (Prefix):
             A prefix that is sent to the WireGuard interface for global routing via some gateway.
         gateway (int): The gateway described above, given as int.
