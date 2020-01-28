@@ -14,5 +14,37 @@
 - name: Install WireGuard
   apt:
     name:
-      - wireguard-dkms
+      - wireguard
+      - python3-pyroute2
     default_release: testing
+
+- name: Install wgsyncer executable
+  copy:
+    src: wgsyncer.py
+    dest: /usr/local/bin/wgsyncer
+    mode: 744
+  notify:
+    - Restart wgsyncer service
+
+- name: Copy wgsyncer config
+  copy:
+    content: "{{ { 'instances': wireguard_synchronize_allowed_ips } | to_nice_json }}"
+    dest: /etc/wgsyncer.json
+  notify:
+    - Restart wgsyncer service
+
+- name: Install wgsyncer service
+  copy:
+    src: wgsyncer.service
+    dest: /etc/systemd/system/wgsyncer.service
+  notify:
+    - Reload systemd configuration
+    - Restart wgsyncer service
+
+- meta: flush_handlers
+
+- name: Enable wgsyncer service
+  service:
+    name: wgsyncer
+    enabled: "{{ wireguard_synchronize_allowed_ips != {} }}"
+    state: "{{ 'started' if wireguard_synchronize_allowed_ips != {} else 'stopped' }}"

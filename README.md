@@ -3,8 +3,7 @@
 This role installs WireGuard from Debian testing.
 WireGuard is not available in Debian stable, yet.
 
-That's it!
-This role is not configurable at all.
+This role can not configure WireGuard.
 For configuring WireGuard you can use our
 [systemd-network role](https://github.com/stuvusIT/systemd-network).
 If you wish so, then read [#configuring-wireguard](#configuring-wireguard).
@@ -44,3 +43,29 @@ Then refer to our
 [systemd-network role](https://github.com/stuvusIT/systemd-network)
 documentation in order to learn how to accordingly populate the `systemd_network_netdevs`
 and `systemd_network_networks` role variables.
+
+## Synchronize a routing table into WireGuard allowed-ips
+
+This role supports synchronizing a routing table into the allowed-ips of a
+WireGuard interface.
+To do so, simply use the role variable `wireguard_synchronize_allowed_ips` as
+in the following example, where the `main` routing table is synchronized into
+the allowed-ips of the WireGuard interface `wg0`.
+
+```yml
+- hosts: wg-server01
+  become: true
+  roles:
+    - role: wireguard
+      wireguard_synchronize_allowed_ips:
+        wg0: main
+    - role: systemd-network
+      systemd_network_netdevs:
+        # /etc/systemd/network/*.netdev files are configured here
+      systemd_network_networks:
+        # /etc/systemd/network/*.network files are configured here
+```
+
+You can do this for any number of WireGuard interfaces.
+Note that they also have to be configured, for example using our
+[systemd-network role](https://github.com/stuvusIT/systemd-network).
