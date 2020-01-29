@@ -21,7 +21,7 @@ The following is a minimal example playbook using this role.
 
 ## Configuring WireGuard
 
-The following is an example playbook if you wish to additionally use our 
+The following is an example playbook if you wish to additionally use our
 [systemd-network role](https://github.com/stuvusIT/systemd-network)
 in order to configure WireGuard.
 
