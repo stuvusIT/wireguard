@@ -1,7 +1,6 @@
-# Ansible role for installing WireGuard from Debian testing
+# Ansible role for installing WireGuard on Debian
 
-This role installs WireGuard from Debian testing.
-WireGuard is not available in Debian stable, yet.
+This role installs WireGuard on Debian.
 
 This role can not configure WireGuard.
 For configuring WireGuard you can use our
