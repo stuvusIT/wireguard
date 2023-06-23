@@ -1,22 +1,9 @@
 ---
-- name: Add Debian testing repo
-  apt_repository:
-    repo: deb http://deb.debian.org/debian/ testing main
-
-- name: Pin Debian testing repo
-  copy:
-    content: |
-      Package: *
-      Pin: release a=testing
-      Pin-Priority: -1
-    dest: /etc/apt/preferences.d/limit-testing
-
 - name: Install WireGuard
   apt:
     name:
       - wireguard
       - python3-pyroute2
-    default_release: testing
 
 - name: Install wgsyncer executable
   copy:
